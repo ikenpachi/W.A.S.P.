@@ -23,254 +23,50 @@ const uint32_t TEMPO_ATUALIZACAO_DISTANCIA = 100;
 uint32_t timeout_distancia;
 uint32_t distancia;
 
-const char index_html[] PROGMEM = R"rawliteral(
-<!DOCTYPE html>
-<html lang='pt-br'>
-<head>
-  <meta charset='UTF-8'>
-  <meta name='viewport' content='width=device-width, initial-scale=1.0, user-scalable=no'>
-  <title>W.A.S.P. - Recon Rover</title>
-  <style>
-    html, body {
-      width: 100%;
-      height: 100%;
-      margin: 0;
-      padding: 0;
-      background-color: #111;
-      color: white;
-      font-family: Arial, sans-serif;
-      overflow: hidden;
-      transition: background-color 0.3s;
-      display: flex;
-      flex-direction: column;
-    }
-    #topbar {
-      width: 100%;
-      height: 40px;
-      background: #000;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 10px;
-      box-sizing: border-box;
-      flex-shrink: 0;
-    }
-    #logo {
-      font-size: 1.2rem;
-      font-weight: bold;
-      color: #f0be00;
-    }
-    #status-container {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    #battery {
-      height: 20px;
-      width: 40px;
-      border: 2px solid #fff;
-      position: relative;
-    }
-    #battery::before {
-      content: '';
-      position: absolute;
-      top: 25%;
-      right: -6px;
-      width: 4px;
-      height: 50%;
-      background: #fff;
-    }
-    #battery-level {
-      height: 100%;
-      width: 0%;
-      background: lime;
-    }
-    #battery-info {
-      font-size: 0.85rem;
-      min-width: 70px;
-      text-align: right;
-    }
-    #menuToggle {
-      background: none;
-      border: none;
-      color: #f0be00;
-      font-size: 1.5rem;
-      cursor: pointer;
-    }
-    #menu {
-      position: absolute;
-      top: 40px;
-      left: 0;
-      width: 0;
-      background: #222;
-      height: calc(100% - 40px);
-      overflow: hidden;
-      transition: width 0.3s;
-      z-index: 10;
-    }
-    #menu.open {
-      width: 200px;
-      padding: 10px;
-    }
-    #menu button {
-      display: block;
-      width: 100%;
-      margin: 10px 0;
-      padding: 10px;
-      border: none;
-      background: #f0be00;
-      color: #000;
-      border-radius: 5px;
-      cursor: pointer;
-    }
-    #main {
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      flex-grow: 1;
-      padding: 10px;
-    }
-    #sensor {
-      text-align: center;
-      margin-bottom: 20px;
-    }
-    #radar {
-      width: 150px;
-      height: 150px;
-      border-radius: 50%;
-      border: 10px solid gray;
-      margin-bottom: 10px;
-    }
-    #alerta {
-      color: red;
-      font-weight: bold;
-    }
-    #joystick {
-      position: relative;
-    }
-    canvas {
-      border: 2px solid #f0be00;
-      border-radius: 10px;
-    }
-  </style>
-</head>
-<body>
-  <div id='topbar'>
-    <button id='menuToggle' onclick='toggleMenu()'>☰</button>
-    <div id='logo'>W.A.S.P.</div>
-    <div id='status-container'>
-      <div id='battery'><div id='battery-level'></div></div>
-      <div id='battery-info'>--% / -- V</div>
-    </div>
-  </div>
-  </div>
-  <div id='main'>
-    <div id='sensor'>
-      <div id='radar'></div>
-      <div id='distance'>-- cm</div>
-      <div id='alerta'></div>
-    </div>
-    <div id='joystick'>
-      <canvas id='canvas_joystick' width='300' height='300'></canvas>
-    </div>
-  </div>
-  <script>
-    const ws = new WebSocket(`ws://${window.location.hostname}/ws`);
+// Estrutura de dados recebida do M5
+typedef struct struct_message {
+  char tipo[10];
+  int valor;
+} struct_message;
 
-    ws.onmessage = (e) => {
-      const data = JSON.parse(e.data);
-      if (data.vbat !== undefined) {
-        const percent = Math.min(100, Math.max(2, (data.vbat / 9000 * 100).toFixed(0)));
-        const level = document.getElementById('battery-level');
-        level.style.width = percent + '%';
-        level.style.backgroundColor = percent < 20 ? 'red' : (percent < 70 ? 'orange' : 'lime');
-      }
-      if (data.distancia !== undefined) {
-        const dist = data.distancia;
-        document.getElementById('distance').innerText = `${dist.toFixed(0)} cm`;
-        document.body.style.backgroundColor = dist < 20 ? '#330000' : '#111';
-        document.getElementById('alerta').innerText = dist < 20 ? '⚠️ Obstáculo próximo!' : '';
-      }
-    };
+void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len == sizeof(struct_message)) {
+    struct_message msg;
+    memcpy(&msg, data, sizeof(msg));
+    Serial.printf("Dados do M5 recebidos: Tipo: %s | Valor: %d\n", msg.tipo, msg.valor);
 
-    function sendCommand(cmd) {
-      ws.send(JSON.stringify({ comando: cmd }));
-    }
+    // Exemplo: redirecionar para WebSocket como JSON
+    StaticJsonDocument<100> json;
+    json[msg.tipo] = msg.valor;
+    String out;
+    serializeJson(json, out);
+    ws.textAll(out);
+  } else {
+    Serial.println("Tamanho de mensagem inválido recebido por ESP-NOW.");
+  }
+}
 
-    function toggleMenu() {
-      document.getElementById('menu').classList.toggle('open');
-    }
+void setup() {
+  Serial.begin(115200);
+  pinMode(PINO_LED, OUTPUT);
+  pinMode(PINO_HCSR04_ECHO, INPUT);
+  pinMode(PINO_HCSR04_TRIGGER, OUTPUT);
+  digitalWrite(PINO_HCSR04_TRIGGER, LOW);
 
-    const canvas = document.getElementById('canvas_joystick');
-    const ctx = canvas.getContext('2d');
-    let center = { x: canvas.width / 2, y: canvas.height / 2 };
-    let dragging = false;
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("WASP", "12345678");
+  Serial.println(WiFi.softAPIP());
 
-    function drawJoystick(x, y) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.beginPath();
-      ctx.arc(center.x, center.y, 100, 0, Math.PI * 2);
-      ctx.fillStyle = '#555';
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(x, y, 20, 0, Math.PI * 2);
-      ctx.fillStyle = '#f0be00';
-      ctx.fill();
-    }
+  // Inicialização ESP-NOW
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Erro ao iniciar ESP-NOW");
+    return;
+  }
+  esp_now_register_recv_cb(OnDataRecv);
 
-    function sendJoystick(v, a) {
-      ws.send(JSON.stringify({ velocidade: v, angulo: a }));
-    }
-
-    function handleJoystick(x, y) {
-      drawJoystick(x, y);
-      const dx = x - center.x;
-      const dy = center.y - y;
-      const angle = Math.atan2(dy, dx);
-      const distance = Math.min(Math.sqrt(dx * dx + dy * dy), 100);
-      const velocidade = Math.round((distance / 100) * 100);
-      const angulo = Math.round((angle * 180 / Math.PI + 360) % 360);
-      sendJoystick(velocidade, angulo);
-    }
-
-    drawJoystick(center.x, center.y);
-
-    canvas.addEventListener('mousedown', e => {
-      dragging = true;
-      handleJoystick(e.offsetX, e.offsetY);
-    });
-    canvas.addEventListener('mouseup', () => {
-      dragging = false;
-      drawJoystick(center.x, center.y);
-      sendJoystick(0, 0);
-    });
-    canvas.addEventListener('mousemove', e => {
-      if (dragging) handleJoystick(e.offsetX, e.offsetY);
-    });
-
-    canvas.addEventListener('touchstart', e => {
-      dragging = true;
-      const t = e.touches[0];
-      const rect = canvas.getBoundingClientRect();
-      handleJoystick(t.clientX - rect.left, t.clientY - rect.top);
-    });
-    canvas.addEventListener('touchend', () => {
-      dragging = false;
-      drawJoystick(center.x, center.y);
-      sendJoystick(0, 0);
-    });
-    canvas.addEventListener('touchmove', e => {
-      if (!dragging) return;
-      const t = e.touches[0];
-      const rect = canvas.getBoundingClientRect();
-      handleJoystick(t.clientX - rect.left, t.clientY - rect.top);
-    });
-  </script>
-</body>
-</html>
-)rawliteral";
-
+  configurar_servidor_web();
+  server.begin();
+}
 
 void configurar_servidor_web(void) {
   ws.onEvent(onEvent);
@@ -341,21 +137,6 @@ void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType 
   } else if (type == WS_EVT_DATA) {
     handleWebSocketMessage(arg, data, length);
   }
-}
-
-void setup() {
-  Serial.begin(115200);
-  pinMode(PINO_LED, OUTPUT);
-  pinMode(PINO_HCSR04_ECHO, INPUT);
-  pinMode(PINO_HCSR04_TRIGGER, OUTPUT);
-  digitalWrite(PINO_HCSR04_TRIGGER, LOW);
-
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP("WASP", "12345678");
-  Serial.println(WiFi.softAPIP());
-
-  configurar_servidor_web();
-  server.begin();
 }
 
 void loop() {
