@@ -25,15 +25,323 @@ uint32_t distancia;
 
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
-<html lang=\"pt-br\">
-<head> ... (HTML completo do painel) ... </html>
+<html lang='pt-br'>
+<head>
+  <meta charset='UTF-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1.0, user-scalable=no'>
+  <title>W.A.S.P. - Recon Rover</title>
+  <style>
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      background-color: #111;
+      color: white;
+      font-family: Arial, sans-serif;
+      overflow: hidden;
+      transition: background-color 0.3s;
+      display: flex;
+      flex-direction: column;
+    }
+    #topbar {
+      width: 100%;
+      height: 40px;
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 10px;
+      box-sizing: border-box;
+      flex-shrink: 0;
+    }
+    #logo {
+      font-size: 1.2rem;
+      font-weight: bold;
+      color: #f0be00;
+    }
+    #status-container {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    #battery {
+      height: 20px;
+      width: 40px;
+      border: 2px solid #fff;
+      position: relative;
+    }
+    #battery::before {
+      content: '';
+      position: absolute;
+      top: 25%;
+      right: -6px;
+      width: 4px;
+      height: 50%;
+      background: #fff;
+    }
+    #battery-level {
+      height: 100%;
+      width: 0%;
+      background: lime;
+    }
+    #battery-info {
+      font-size: 0.85rem;
+      min-width: 70px;
+      text-align: right;
+    }
+    #menuToggle {
+      background: none;
+      border: none;
+      color: #f0be00;
+      font-size: 1.5rem;
+      cursor: pointer;
+    }
+    #menu {
+      position: absolute;
+      top: 40px;
+      left: 0;
+      width: 0;
+      background: #222;
+      height: calc(100% - 40px);
+      overflow: hidden;
+      transition: width 0.3s;
+      z-index: 10;
+    }
+    #menu.open {
+      width: 200px;
+      padding: 10px;
+    }
+    #menu button {
+      display: block;
+      width: 100%;
+      margin: 10px 0;
+      padding: 10px;
+      border: none;
+      background: #f0be00;
+      color: #000;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    #main {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      flex-grow: 1;
+      padding: 10px;
+    }
+    #sensor {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    #radar {
+      width: 150px;
+      height: 150px;
+      border-radius: 50%;
+      border: 10px solid gray;
+      margin-bottom: 10px;
+    }
+    #alerta {
+      color: red;
+      font-weight: bold;
+    }
+    #joystick {
+      position: relative;
+    }
+    canvas {
+      border: 2px solid #f0be00;
+      border-radius: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div id='topbar'>
+    <button id='menuToggle' onclick='toggleMenu()'>☰</button>
+    <div id='logo'>W.A.S.P.</div>
+    <div id='status-container'>
+      <div id='battery'><div id='battery-level'></div></div>
+      <div id='battery-info'>--% / -- V</div>
+    </div>
+  </div>
+  </div>
+  <div id='main'>
+    <div id='sensor'>
+      <div id='radar'></div>
+      <div id='distance'>-- cm</div>
+      <div id='alerta'></div>
+    </div>
+    <div id='joystick'>
+      <canvas id='canvas_joystick' width='300' height='300'></canvas>
+    </div>
+  </div>
+  <script>
+    const ws = new WebSocket(`ws://${window.location.hostname}/ws`);
+
+    ws.onmessage = (e) => {
+      const data = JSON.parse(e.data);
+      if (data.vbat !== undefined) {
+        const percent = Math.min(100, Math.max(2, (data.vbat / 9000 * 100).toFixed(0)));
+        const level = document.getElementById('battery-level');
+        level.style.width = percent + '%';
+        level.style.backgroundColor = percent < 20 ? 'red' : (percent < 70 ? 'orange' : 'lime');
+      }
+      if (data.distancia !== undefined) {
+        const dist = data.distancia;
+        document.getElementById('distance').innerText = `${dist.toFixed(0)} cm`;
+        document.body.style.backgroundColor = dist < 20 ? '#330000' : '#111';
+        document.getElementById('alerta').innerText = dist < 20 ? '⚠️ Obstáculo próximo!' : '';
+      }
+    };
+
+    function sendCommand(cmd) {
+      ws.send(JSON.stringify({ comando: cmd }));
+    }
+
+    function toggleMenu() {
+      document.getElementById('menu').classList.toggle('open');
+    }
+
+    const canvas = document.getElementById('canvas_joystick');
+    const ctx = canvas.getContext('2d');
+    let center = { x: canvas.width / 2, y: canvas.height / 2 };
+    let dragging = false;
+
+    function drawJoystick(x, y) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.beginPath();
+      ctx.arc(center.x, center.y, 100, 0, Math.PI * 2);
+      ctx.fillStyle = '#555';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(x, y, 20, 0, Math.PI * 2);
+      ctx.fillStyle = '#f0be00';
+      ctx.fill();
+    }
+
+    function sendJoystick(v, a) {
+      ws.send(JSON.stringify({ velocidade: v, angulo: a }));
+    }
+
+    function handleJoystick(x, y) {
+      drawJoystick(x, y);
+      const dx = x - center.x;
+      const dy = center.y - y;
+      const angle = Math.atan2(dy, dx);
+      const distance = Math.min(Math.sqrt(dx * dx + dy * dy), 100);
+      const velocidade = Math.round((distance / 100) * 100);
+      const angulo = Math.round((angle * 180 / Math.PI + 360) % 360);
+      sendJoystick(velocidade, angulo);
+    }
+
+    drawJoystick(center.x, center.y);
+
+    canvas.addEventListener('mousedown', e => {
+      dragging = true;
+      handleJoystick(e.offsetX, e.offsetY);
+    });
+    canvas.addEventListener('mouseup', () => {
+      dragging = false;
+      drawJoystick(center.x, center.y);
+      sendJoystick(0, 0);
+    });
+    canvas.addEventListener('mousemove', e => {
+      if (dragging) handleJoystick(e.offsetX, e.offsetY);
+    });
+
+    canvas.addEventListener('touchstart', e => {
+      dragging = true;
+      const t = e.touches[0];
+      const rect = canvas.getBoundingClientRect();
+      handleJoystick(t.clientX - rect.left, t.clientY - rect.top);
+    });
+    canvas.addEventListener('touchend', () => {
+      dragging = false;
+      drawJoystick(center.x, center.y);
+      sendJoystick(0, 0);
+    });
+    canvas.addEventListener('touchmove', e => {
+      if (!dragging) return;
+      const t = e.touches[0];
+      const rect = canvas.getBoundingClientRect();
+      handleJoystick(t.clientX - rect.left, t.clientY - rect.top);
+    });
+  </script>
+</body>
+</html>
 )rawliteral";
 
-void configurar_servidor_web();
-void handleWebSocketMessage(void *, uint8_t *, size_t);
-int16_t ler_distancia();
-void onEvent(AsyncWebSocket *, AsyncWebSocketClient *, AwsEventType, void *, uint8_t *, size_t);
-void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len);
+
+void configurar_servidor_web(void) {
+  ws.onEvent(onEvent);
+  server.addHandler(&ws);
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send_P(200, "text/html", index_html);
+  });
+}
+
+void handleWebSocketMessage(void *arg, uint8_t *data, size_t length) {
+  AwsFrameInfo *info = (AwsFrameInfo*)arg;
+  if (info->final && info->index == 0 && info->len == length && info->opcode == WS_TEXT) {
+    data[length] = 0;
+    StaticJsonDocument<100> json;
+    DeserializationError erro = deserializeJson(json, data);
+    if (erro) return;
+
+    if (json.containsKey("velocidade") && json.containsKey("angulo")) {
+      int v = json["velocidade"];
+      int a = json["angulo"];
+      if (a >= 90 && a <= 180)
+        motores.turn(v * (135 - a) / 45 , v);
+      else if (a >= 0 && a < 90)
+        motores.turn(v, v * (a - 45) / 45);
+      else if (a > 180 && a <= 270)
+        motores.turn(-1 * v, -1 * v * (a - 225) / 45);
+      else if (a > 270)
+        motores.turn(-1 * v * (315 - a) / 45, -1 * v);
+      else
+        motores.stop();
+      return;
+    }
+
+    String comando = json[ALIAS_COMANDO];
+    if (comando == "manual") {
+      Serial.println("Modo manual ativado.");
+    } else if (comando == "auto") {
+      Serial.println("Modo automático ativado.");
+    } else if (comando == "stop") {
+      motores.stop();
+      Serial.println("Parado.");
+    } else if (comando == "scan") {
+      StaticJsonDocument<100> resp;
+      resp["scan"]["ssid"] = "Red_Exemplo";
+      resp["scan"]["rssi"] = -42;
+      String msg;
+      serializeJson(resp, msg);
+      ws.textAll(msg);
+    }
+  }
+}
+
+int16_t ler_distancia(void) {
+  digitalWrite(PINO_HCSR04_TRIGGER, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(PINO_HCSR04_TRIGGER, LOW);
+  return pulseIn(PINO_HCSR04_ECHO, HIGH) / 58;
+}
+
+void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type,
+             void *arg, uint8_t *data, size_t length) {
+  if (type == WS_EVT_CONNECT) {
+    digitalWrite(PINO_LED, HIGH);
+    Serial.printf("Cliente WebSocket #%u conectado\n", client->id());
+  } else if (type == WS_EVT_DISCONNECT) {
+    digitalWrite(PINO_LED, LOW);
+    Serial.printf("Cliente WebSocket #%u desconectado\n", client->id());
+  } else if (type == WS_EVT_DATA) {
+    handleWebSocketMessage(arg, data, length);
+  }
+}
 
 void setup() {
   Serial.begin(115200);
@@ -43,29 +351,20 @@ void setup() {
   digitalWrite(PINO_HCSR04_TRIGGER, LOW);
 
   WiFi.mode(WIFI_AP);
-  WiFi.softAP("Vespa-Scout", "robocore");
-  Serial.println("Access Point criado: Vespa-Scout");
+  WiFi.softAP("WASP", "12345678");
   Serial.println(WiFi.softAPIP());
-
-  if (esp_now_init() != ESP_OK) {
-    Serial.println("Erro ao iniciar ESP-NOW");
-    return;
-  }
-
-  esp_now_register_recv_cb(OnDataRecv);
 
   configurar_servidor_web();
   server.begin();
-  Serial.println("Servidor iniciado");
 }
 
 void loop() {
   if (millis() > timeout_vbat) {
     if (ws.count() > 0) {
       uint32_t tensao = vbat.readVoltage();
-      StaticJsonDocument<JSON_OBJECT_SIZE(1)> json;
+      StaticJsonDocument<50> json;
       json["vbat"] = tensao;
-      char msg[64];
+      String msg;
       serializeJson(json, msg);
       ws.textAll(msg);
     }
@@ -74,82 +373,16 @@ void loop() {
 
   if (millis() > timeout_distancia) {
     if (ws.count() > 0) {
+      float fator = 0.2;
       float leitura = ler_distancia();
-      distancia = leitura * 0.2 + (1.0 - 0.2) * (float)distancia;
-      StaticJsonDocument<JSON_OBJECT_SIZE(1)> json;
+      distancia = leitura * fator + (1.0 - fator) * (float)distancia;
+
+      StaticJsonDocument<50> json;
       json["distancia"] = distancia;
-      char msg[64];
+      String msg;
       serializeJson(json, msg);
       ws.textAll(msg);
     }
     timeout_distancia = millis() + TEMPO_ATUALIZACAO_DISTANCIA;
-  }
-}
-
-void configurar_servidor_web() {
-  ws.onEvent(onEvent);
-  server.addHandler(&ws);
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send_P(200, "text/html", index_html);
-  });
-}
-
-void handleWebSocketMessage(void *arg, uint8_t *data, size_t len) {
-  AwsFrameInfo *info = (AwsFrameInfo *)arg;
-  if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
-    data[len] = 0;
-    StaticJsonDocument<JSON_OBJECT_SIZE(1)> json;
-    DeserializationError erro = deserializeJson(json, data);
-    if (!erro && json.containsKey(ALIAS_COMANDO)) {
-      const char *cmd = json[ALIAS_COMANDO];
-      Serial.printf("Comando recebido: %s\n", cmd);
-      if (strcmp(cmd, "scan") == 0) {
-        uint8_t mac[] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF}; // substituir pelo MAC real do M5
-        const char *msg = "scan";
-        esp_now_send(mac, (const uint8_t *)msg, strlen(msg));
-      }
-    }
-  }
-}
-
-void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type,
-             void *arg, uint8_t *data, size_t len) {
-  switch (type) {
-    case WS_EVT_CONNECT:
-      digitalWrite(PINO_LED, HIGH);
-      Serial.printf("Cliente #%u conectado\n", client->id());
-      break;
-    case WS_EVT_DISCONNECT:
-      digitalWrite(PINO_LED, LOW);
-      Serial.printf("Cliente #%u desconectado\n", client->id());
-      break;
-    case WS_EVT_DATA:
-      handleWebSocketMessage(arg, data, len);
-      break;
-    default:
-      break;
-  }
-}
-
-int16_t ler_distancia() {
-  digitalWrite(PINO_HCSR04_TRIGGER, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(PINO_HCSR04_TRIGGER, LOW);
-  return pulseIn(PINO_HCSR04_ECHO, HIGH) / 58;
-}
-
-void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len) {
-  char macStr[18];
-  snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-           info->src_addr[0], info->src_addr[1], info->src_addr[2],
-           info->src_addr[3], info->src_addr[4], info->src_addr[5]);
-  Serial.printf("Dados recebidos de %s\n", macStr);
-
-  StaticJsonDocument<JSON_OBJECT_SIZE(1)> doc;
-  DeserializationError error = deserializeJson(doc, incomingData, len);
-  if (!error && doc.containsKey("scan")) {
-    ws.textAll(doc.as<String>());
-  } else {
-    Serial.println("JSON inválido ou sem chave esperada.");
   }
 }
