@@ -1,0 +1,155 @@
+#include <WiFi.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <ArduinoJson.h>
+#include <esp_now.h>
+#include <RoboCore_Vespa.h>
+
+AsyncWebServer server(80);
+AsyncWebSocket ws("/ws");
+
+VespaMotors motores;
+VespaBattery vbat;
+
+const uint8_t PINO_LED = 15;
+const uint8_t PINO_HCSR04_ECHO = 26;
+const uint8_t PINO_HCSR04_TRIGGER = 25;
+
+const char *ALIAS_COMANDO = "comando";
+const uint32_t TEMPO_ATUALIZACAO_VBAT = 5000;
+uint32_t timeout_vbat;
+
+const uint32_t TEMPO_ATUALIZACAO_DISTANCIA = 100;
+uint32_t timeout_distancia;
+uint32_t distancia;
+
+const char index_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang=\"pt-br\">
+<head> ... (HTML completo do painel) ... </html>
+)rawliteral";
+
+void configurar_servidor_web();
+void handleWebSocketMessage(void *, uint8_t *, size_t);
+int16_t ler_distancia();
+void onEvent(AsyncWebSocket *, AsyncWebSocketClient *, AwsEventType, void *, uint8_t *, size_t);
+void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len);
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(PINO_LED, OUTPUT);
+  pinMode(PINO_HCSR04_ECHO, INPUT);
+  pinMode(PINO_HCSR04_TRIGGER, OUTPUT);
+  digitalWrite(PINO_HCSR04_TRIGGER, LOW);
+
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("Vespa-Scout", "robocore");
+  Serial.println("Access Point criado: Vespa-Scout");
+  Serial.println(WiFi.softAPIP());
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Erro ao iniciar ESP-NOW");
+    return;
+  }
+
+  esp_now_register_recv_cb(OnDataRecv);
+
+  configurar_servidor_web();
+  server.begin();
+  Serial.println("Servidor iniciado");
+}
+
+void loop() {
+  if (millis() > timeout_vbat) {
+    if (ws.count() > 0) {
+      uint32_t tensao = vbat.readVoltage();
+      StaticJsonDocument<JSON_OBJECT_SIZE(1)> json;
+      json["vbat"] = tensao;
+      char msg[64];
+      serializeJson(json, msg);
+      ws.textAll(msg);
+    }
+    timeout_vbat = millis() + TEMPO_ATUALIZACAO_VBAT;
+  }
+
+  if (millis() > timeout_distancia) {
+    if (ws.count() > 0) {
+      float leitura = ler_distancia();
+      distancia = leitura * 0.2 + (1.0 - 0.2) * (float)distancia;
+      StaticJsonDocument<JSON_OBJECT_SIZE(1)> json;
+      json["distancia"] = distancia;
+      char msg[64];
+      serializeJson(json, msg);
+      ws.textAll(msg);
+    }
+    timeout_distancia = millis() + TEMPO_ATUALIZACAO_DISTANCIA;
+  }
+}
+
+void configurar_servidor_web() {
+  ws.onEvent(onEvent);
+  server.addHandler(&ws);
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send_P(200, "text/html", index_html);
+  });
+}
+
+void handleWebSocketMessage(void *arg, uint8_t *data, size_t len) {
+  AwsFrameInfo *info = (AwsFrameInfo *)arg;
+  if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
+    data[len] = 0;
+    StaticJsonDocument<JSON_OBJECT_SIZE(1)> json;
+    DeserializationError erro = deserializeJson(json, data);
+    if (!erro && json.containsKey(ALIAS_COMANDO)) {
+      const char *cmd = json[ALIAS_COMANDO];
+      Serial.printf("Comando recebido: %s\n", cmd);
+      if (strcmp(cmd, "scan") == 0) {
+        uint8_t mac[] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF}; // substituir pelo MAC real do M5
+        const char *msg = "scan";
+        esp_now_send(mac, (const uint8_t *)msg, strlen(msg));
+      }
+    }
+  }
+}
+
+void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type,
+             void *arg, uint8_t *data, size_t len) {
+  switch (type) {
+    case WS_EVT_CONNECT:
+      digitalWrite(PINO_LED, HIGH);
+      Serial.printf("Cliente #%u conectado\n", client->id());
+      break;
+    case WS_EVT_DISCONNECT:
+      digitalWrite(PINO_LED, LOW);
+      Serial.printf("Cliente #%u desconectado\n", client->id());
+      break;
+    case WS_EVT_DATA:
+      handleWebSocketMessage(arg, data, len);
+      break;
+    default:
+      break;
+  }
+}
+
+int16_t ler_distancia() {
+  digitalWrite(PINO_HCSR04_TRIGGER, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(PINO_HCSR04_TRIGGER, LOW);
+  return pulseIn(PINO_HCSR04_ECHO, HIGH) / 58;
+}
+
+void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len) {
+  char macStr[18];
+  snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+           info->src_addr[0], info->src_addr[1], info->src_addr[2],
+           info->src_addr[3], info->src_addr[4], info->src_addr[5]);
+  Serial.printf("Dados recebidos de %s\n", macStr);
+
+  StaticJsonDocument<JSON_OBJECT_SIZE(1)> doc;
+  DeserializationError error = deserializeJson(doc, incomingData, len);
+  if (!error && doc.containsKey("scan")) {
+    ws.textAll(doc.as<String>());
+  } else {
+    Serial.println("JSON inválido ou sem chave esperada.");
+  }
+}
