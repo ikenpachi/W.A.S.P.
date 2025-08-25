@@ -46,6 +46,7 @@ Open browser and go to:
 
 ## Project Structure 
 
+```text
 W.A.S.P/
 ├── vespa_controller.ino         # Main code for Vespa vehicle
 ├── /assets/                     # Logos, mockups, and diagrams
